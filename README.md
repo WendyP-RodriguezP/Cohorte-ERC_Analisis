@@ -1,5 +1,3 @@
-# Cohorte-ERC_Analisis
-Proyecto Reproducible:Analisis Cohorte ERC
 # Cohorte ERC: proyecto analítico reproducible
 
 ## Descripción

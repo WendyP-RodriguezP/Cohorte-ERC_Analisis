@@ -60,3 +60,6 @@ data/processed/*
 # Archivos sensibles
 .Renviron
 *.credentials
+
+# Incluir la documentacion del proyecto
+!docs/

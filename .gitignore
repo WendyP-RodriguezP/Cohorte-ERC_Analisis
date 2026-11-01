@@ -48,3 +48,15 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+.DS_Store
+
+# Datos de investigacion (nunca subir al repositorio)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Archivos sensibles
+.Renviron
+*.credentials

@@ -63,3 +63,7 @@ data/processed/*
 
 # Incluir la documentacion del proyecto
 !docs/
+
+# Base analitica seudonimizada (sintetica): se incluye en el repositorio
+!data/processed/base_analitica_v1.0.rds
+!data/processed/base_analitica_v1.0.csv

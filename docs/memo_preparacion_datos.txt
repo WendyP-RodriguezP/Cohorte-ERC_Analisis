@@ -1,0 +1,121 @@
+MEMO: DECISIONES DE PREPARACIÓN DE DATOS
+Proyecto: Cohorte ERC — Seminario de Epidemiología Clínica II
+Fecha: 01/11/2026
+Autor: Wendy Paola Rodríguez Pugliesse
+Script: code/02_limpieza_preparacion.R
+Base resultante: data/processed/base_analitica_v1.0.rds
+(300 participantes, 56 variables, 33 eventos de progresión a G5/TRR)
+
+═══════════════════════════════════════════════════
+1. CORRECCIÓN DE VALORES ATÍPICOS
+═══════════════════════════════════════════════════
+
+Criterio: valores fuera de los rangos de plausibilidad definidos en el
+script (sección 3), contrastados con la TFG basal, el estadio KDIGO, las
+mediciones del mes 12 y el IMC registrado.
+
+CREATININA BASAL (creatinina_mg_dl_basal; rango 0.4–15 mg/dL):
+
+  ERC-0058: 0.08 → 0.84 mg/dL
+    Justificación: valor fisiológicamente imposible. Compatible con error
+    de punto decimal: paciente en estadio G2 con TFG de 77 mL/min/1.73m²
+    y creatinina al mes 12 de 0.92 mg/dL.
+
+  ERC-0064: 142 → 1.61 mg/dL
+    Justificación: valor compatible con registro en µmol/L. Se convirtió a
+    mg/dL (142 / 88.4 = 1.61). Paciente en G2 con creatinina al mes 12 de
+    1.03 mg/dL.
+
+  ERC-0122: 18.5 → NA (faltante)
+    Justificación: incompatible con la TFG basal registrada (25 mL/min/1.73m²);
+    según CKD-EPI 2021, una creatinina de 18.5 mg/dL correspondería a una TFG
+    cercana a 3 mL/min/1.73m² (estadio G5). La creatinina al mes 12 fue de
+    4.33 mg/dL. La corrección por punto decimal (1.85) tampoco es coherente
+    con el estadio G4. Al no poder reconstruirse el valor real, se codificó
+    como faltante.
+
+PESO BASAL (peso_kg_basal; rango 35–180 kg):
+
+  ERC-0152: 198 → 52.2 kg
+    Justificación: incompatible con el IMC basal registrado (22.9 kg/m²) y
+    la talla (151 cm); el peso al mes 12 fue 42.9 kg. Se reconstruyó como
+    IMC × talla² (22.9 × 1.51² = 52.2 kg).
+
+  ERC-0234: 8.5 → 49.9 kg
+    Justificación: valor imposible para un adulto. El IMC basal registrado
+    (20.5 kg/m²) y la talla (156 cm) permiten reconstruirlo
+    (20.5 × 1.56² = 49.9 kg), coherente con el peso al mes 12 (47.4 kg).
+
+═══════════════════════════════════════════════════
+2. VERIFICACIONES DE CONSISTENCIA LÓGICA
+═══════════════════════════════════════════════════
+  - PAD ≥ PAS: 0 casos.
+  - Tabaquismo actual y previo simultáneos: 0 casos.
+  - Discrepancia entre IMC registrado y calculado > 2 kg/m²: únicamente
+    los dos pesos atípicos; resuelta tras su corrección.
+
+═══════════════════════════════════════════════════
+3. RECODIFICACIÓN Y VARIABLES DERIVADAS
+═══════════════════════════════════════════════════
+  Tipos de variables:
+  - Factores ordenados: estadio_basal (G2 < G3a < G3b < G4) y
+    nivel_educativo.
+  - Factores nominales: sexo, etnia, procedencia, etiologia_erc.
+  - Lógicas (TRUE/FALSE): comorbilidades, tabaquismo, medicamentos,
+    pérdidas de seguimiento y desenlace.
+
+  Variables derivadas:
+  - imc_calculado: peso / talla² con el peso corregido
+  - grupo_edad: <45, 45–59, 60–74, ≥75 años
+  - estadio_agrupado: G2-G3a vs G3b-G4
+  - etiologia_agrupada: Diabética / Hipertensiva / Otras-Desconocida
+  - log_proteinuria_basal: logaritmo natural de la proteinuria basal
+  - cambio_tfg_m12: TFG mes 12 − TFG basal
+  - cambio_tfg_m24: TFG mes 24 − TFG basal
+  - tasa_declive_tfg: (TFG mes 24 − TFG basal) / 2, en mL/min/año
+  - anemia_basal: Hb < 12 g/dL (mujeres) o < 13 g/dL (hombres)
+
+═══════════════════════════════════════════════════
+4. MANEJO DE DATOS FALTANTES
+═══════════════════════════════════════════════════
+  En las variables de laboratorio de seguimiento, el 19.2% de los valores
+  está ausente, explicado por la pérdida de seguimiento más exámenes
+  incompletos.
+
+  Faltantes de TFG al mes 12 según estadio basal:
+    G2: 6/69 (8.7%)   G3a: 7/93 (7.5%)   G3b: 17/85 (20.0%)   G4: 7/53 (13.2%)
+
+  Interpretación: la proporción de faltantes es mayor en los estadios
+  avanzados (G3b-G4), por lo que el patrón no es compatible con MCAR y
+  sugiere un mecanismo MAR condicionado al estadio basal.
+
+  Decisión: no se realizó imputación en la base analítica v1.0. Se
+  conservan los 300 participantes; los análisis de casos completos
+  excluirán los faltantes según las variables de cada modelo. Dado el
+  patrón MAR, se planea un análisis de sensibilidad con imputación
+  múltiple que incluya el estadio basal como predictor.
+
+═══════════════════════════════════════════════════
+5. VARIABLES EXCLUIDAS
+═══════════════════════════════════════════════════
+  - imc_basal: reemplazado por imc_calculado
+  - discrepancia_imc: variable auxiliar de verificación
+  - id_estudio y fecha_reclutamiento: ver sección 6
+
+═══════════════════════════════════════════════════
+6. IDENTIFICACIÓN Y SEUDONIMIZACIÓN
+═══════════════════════════════════════════════════
+  Variables potencialmente identificadoras revisadas: id_estudio,
+  fecha_reclutamiento, edad, sexo, etnia y procedencia. La base no
+  contiene nombres, documentos de identidad, direcciones ni teléfonos.
+
+  - id_estudio: seudonimizado. Se reemplazó por un código aleatorio
+    (id_analitico, P001–P300) generado con semilla fija (set.seed(2026))
+    para garantizar la reproducibilidad. La tabla de correspondencia se
+    almacena únicamente en data/processed/tabla_correspondencia_ids.csv,
+    excluida del repositorio.
+  - fecha_reclutamiento: generalizada a año y semestre de reclutamiento;
+    se eliminó la fecha exacta. El tiempo de seguimiento se conserva en
+    tiempo_seguimiento_dias.
+  - edad, sexo, etnia y procedencia: se conservan por su relevancia
+    analítica; la edad también está disponible agrupada (grupo_edad).

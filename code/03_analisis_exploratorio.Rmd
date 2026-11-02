@@ -1,0 +1,553 @@
+---
+title: "Análisis exploratorio de datos — Cohorte ERC"
+subtitle: "Seminario de Epidemiología Clínica II — Módulo 2"
+author: "Wendy Paola Rodríguez Pugliesse"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 9,
+  fig.height = 5.5
+)
+```
+
+```{r carga-paquetes-datos}
+library(tidyverse)
+library(here)
+library(skimr)
+library(gtsummary)
+library(naniar)
+library(corrplot)
+
+# Cargar base analítica (generada por code/02_limpieza_preparacion.R)
+base <- readRDS(here("data", "processed", "base_analitica_v1.0.rds"))
+
+cat("Base cargada:", nrow(base), "participantes,",
+    ncol(base), "variables\n")
+
+colores_estadio <- c("G2" = "#93C6E0", "G3a" = "#4A90D9",
+                     "G3b" = "#2E75B6", "G4" = "#1F5C99")
+```
+
+# Descripción de la base de datos
+
+La base analítica incluye `r nrow(base)` participantes con enfermedad renal
+crónica en estadios G2 a G4, seguidos durante 24 meses con dos puntos de
+evaluación (mes 12 y mes 24). Los participantes están identificados con un
+código seudonimizado (`id_analitico`); la base no contiene identificadores
+directos.
+
+## Flujo de participantes
+
+```{r flujo-participantes}
+flujo <- tibble(
+  Etapa = c(
+    "Participantes en la base original",
+    "Pérdida de seguimiento al mes 12",
+    "Pérdida de seguimiento al mes 24",
+    "Participantes con seguimiento completo al mes 24",
+    "Participantes con desenlace (progresión G5/TRR)"
+  ),
+  N = c(
+    nrow(base),
+    sum(base$perdida_seguimiento_m12, na.rm = TRUE),
+    sum(base$perdida_seguimiento_m24, na.rm = TRUE),
+    sum(!base$perdida_seguimiento_m24, na.rm = TRUE),
+    sum(base$progresion_g5_o_trr, na.rm = TRUE)
+  ),
+  Porcentaje = c(
+    "100%",
+    paste0(round(mean(base$perdida_seguimiento_m12, na.rm = TRUE) * 100, 1), "%"),
+    paste0(round(mean(base$perdida_seguimiento_m24, na.rm = TRUE) * 100, 1), "%"),
+    paste0(round(mean(!base$perdida_seguimiento_m24, na.rm = TRUE) * 100, 1), "%"),
+    paste0(round(mean(base$progresion_g5_o_trr, na.rm = TRUE) * 100, 1), "%")
+  )
+)
+
+knitr::kable(flujo, caption = "Tabla. Flujo de participantes en la cohorte")
+```
+
+De los `r nrow(base)` participantes, `r sum(!base$perdida_seguimiento_m24)`
+(`r round(mean(!base$perdida_seguimiento_m24) * 100, 1)`%) completaron el
+seguimiento al mes 24. La pérdida acumulada fue de
+`r round(mean(base$perdida_seguimiento_m12) * 100, 1)`% al mes 12 y de
+`r round(mean(base$perdida_seguimiento_m24) * 100, 1)`% al mes 24, valores
+inferiores al 20% que habitualmente se considera aceptable para estudios de
+cohorte; no obstante, deben evaluarse sus posibles determinantes (sección 8).
+Se registraron `r sum(base$progresion_g5_o_trr)` eventos del desenlace primario
+(progresión a G5 o inicio de TRR).
+
+# Resumen estadístico general
+
+```{r resumen-skim}
+skim(base %>%
+       select(edad, estadio_basal, sexo, diabetes, hipertension,
+              tfg_ml_min_basal, creatinina_mg_dl_basal,
+              hemoglobina_g_dl_basal, albumina_g_dl_basal,
+              proteinuria_mg_g_basal, pas_mmhg_basal,
+              progresion_g5_o_trr, tiempo_seguimiento_dias))
+```
+
+# Características basales de la cohorte
+
+## Tabla 1: características por estadio de ERC
+
+```{r tabla-1-caracteristicas-basales}
+tabla_1 <- base %>%
+  select(estadio_basal, edad, sexo, etiologia_agrupada,
+         diabetes, hipertension, cardiopatia_isquemica,
+         imc_calculado, pas_mmhg_basal,
+         tfg_ml_min_basal, creatinina_mg_dl_basal,
+         hemoglobina_g_dl_basal, albumina_g_dl_basal,
+         proteinuria_mg_g_basal, anemia_basal,
+         ieca_o_ara2, estatinas, n_medicamentos_totales) %>%
+  tbl_summary(
+    by = estadio_basal,
+    label = list(
+      edad                   ~ "Edad (años)",
+      sexo                   ~ "Sexo",
+      etiologia_agrupada     ~ "Etiología de la ERC",
+      diabetes               ~ "Diabetes mellitus",
+      hipertension           ~ "Hipertensión arterial",
+      cardiopatia_isquemica  ~ "Cardiopatía isquémica",
+      imc_calculado          ~ "IMC (kg/m²)",
+      pas_mmhg_basal         ~ "PAS (mmHg)",
+      tfg_ml_min_basal       ~ "TFG estimada (mL/min/1.73m²)",
+      creatinina_mg_dl_basal ~ "Creatinina sérica (mg/dL)",
+      hemoglobina_g_dl_basal ~ "Hemoglobina (g/dL)",
+      albumina_g_dl_basal    ~ "Albúmina sérica (g/dL)",
+      proteinuria_mg_g_basal ~ "Proteinuria (mg/g)",
+      anemia_basal           ~ "Anemia al reclutamiento",
+      ieca_o_ara2            ~ "IECA o ARA2",
+      estatinas              ~ "Estatinas",
+      n_medicamentos_totales ~ "N.° total de medicamentos"
+    ),
+    statistic = list(
+      all_continuous()  ~ "{median} ({p25}–{p75})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "no"
+  ) %>%
+  add_overall() %>%
+  add_p() %>%
+  modify_caption("**Tabla 1. Características basales por estadio de ERC**") %>%
+  bold_labels()
+
+tabla_1
+```
+
+```{r medianas-por-estadio, include=FALSE}
+med <- base %>%
+  group_by(estadio_basal) %>%
+  summarise(tfg = median(tfg_ml_min_basal, na.rm = TRUE),
+            cr  = median(creatinina_mg_dl_basal, na.rm = TRUE),
+            hgb = median(hemoglobina_g_dl_basal, na.rm = TRUE))
+```
+
+La Tabla 1 muestra el gradiente esperado en los marcadores de función renal:
+la mediana de TFG descendió de `r med$tfg[1]` mL/min/1.73m² en G2 a
+`r med$tfg[4]` en G4, mientras la creatinina aumentó de
+`r round(med$cr[1], 2)` a `r round(med$cr[4], 2)` mg/dL (p < 0.001 en ambos
+casos). La hemoglobina fue menor en G4 (mediana `r med$hgb[4]` g/dL), lo que es
+coherente con la anemia de la ERC avanzada, y la prevalencia de anemia fue
+alta en todos los estadios. En contraste, la edad, el sexo, las comorbilidades,
+la PAS, el IMC, la albúmina, el uso de medicamentos y, de forma inesperada, la
+proteinuria no mostraron diferencias significativas entre estadios. La
+ausencia de gradiente en la proteinuria no es la esperada clínicamente y se
+retoma en las conclusiones.
+
+# Distribución de variables continuas
+
+## Histogramas
+
+```{r histogramas-variables-continuas, fig.height=6}
+base %>%
+  select(edad, tfg_ml_min_basal, creatinina_mg_dl_basal,
+         hemoglobina_g_dl_basal, albumina_g_dl_basal,
+         proteinuria_mg_g_basal, pas_mmhg_basal,
+         log_proteinuria_basal) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "valor") %>%
+  mutate(variable = recode(variable,
+    "edad"                   = "Edad (años)",
+    "tfg_ml_min_basal"       = "TFG (mL/min/1.73m²)",
+    "creatinina_mg_dl_basal" = "Creatinina (mg/dL)",
+    "hemoglobina_g_dl_basal" = "Hemoglobina (g/dL)",
+    "albumina_g_dl_basal"    = "Albúmina (g/dL)",
+    "proteinuria_mg_g_basal" = "Proteinuria (mg/g)",
+    "pas_mmhg_basal"         = "PAS (mmHg)",
+    "log_proteinuria_basal"  = "Log-proteinuria"
+  )) %>%
+  filter(!is.na(valor)) %>%
+  ggplot(aes(x = valor)) +
+  geom_histogram(bins = 25, fill = "#2E75B6", color = "white", alpha = 0.8) +
+  facet_wrap(~variable, scales = "free", ncol = 4) +
+  labs(title = "Distribución de variables continuas basales",
+       x = NULL, y = "Frecuencia") +
+  theme_minimal(base_size = 11)
+```
+
+La edad, la PAS, la hemoglobina y la albúmina tienen distribuciones
+aproximadamente simétricas. La TFG muestra una distribución amplia, reflejo de
+la mezcla de estadios. La creatinina tiene sesgo positivo moderado y la
+proteinuria un sesgo marcado (mediana
+`r median(base$proteinuria_mg_g_basal, na.rm = TRUE)` mg/g; rango
+`r min(base$proteinuria_mg_g_basal, na.rm = TRUE)`–`r max(base$proteinuria_mg_g_basal, na.rm = TRUE)`
+mg/g). La transformación logarítmica de la proteinuria produce una distribución
+aproximadamente simétrica, lo que justifica su uso en los modelos de regresión.
+
+## Valores atípicos por estadio
+
+```{r boxplots-atipicos-por-estadio, fig.height=6}
+base %>%
+  select(estadio_basal, tfg_ml_min_basal, creatinina_mg_dl_basal,
+         hemoglobina_g_dl_basal, albumina_g_dl_basal, pas_mmhg_basal) %>%
+  pivot_longer(-estadio_basal, names_to = "variable", values_to = "valor") %>%
+  mutate(variable = recode(variable,
+    "tfg_ml_min_basal"       = "TFG (mL/min/1.73m²)",
+    "creatinina_mg_dl_basal" = "Creatinina (mg/dL)",
+    "hemoglobina_g_dl_basal" = "Hemoglobina (g/dL)",
+    "albumina_g_dl_basal"    = "Albúmina (g/dL)",
+    "pas_mmhg_basal"         = "PAS (mmHg)"
+  )) %>%
+  filter(!is.na(valor)) %>%
+  ggplot(aes(x = estadio_basal, y = valor, fill = estadio_basal)) +
+  geom_boxplot(outlier.shape = 21, outlier.fill = "red",
+               outlier.size = 2, alpha = 0.7) +
+  scale_fill_manual(values = colores_estadio) +
+  facet_wrap(~variable, scales = "free_y", ncol = 3) +
+  labs(title = "Distribución de variables por estadio de ERC",
+       subtitle = "Los puntos rojos indican posibles valores atípicos residuales",
+       x = "Estadio de ERC", y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none")
+```
+
+```{r listado-atipicos-residuales}
+# Listado de atípicos residuales (criterio 1.5 × RIC dentro de cada estadio)
+vars_box <- c("tfg_ml_min_basal", "creatinina_mg_dl_basal",
+              "hemoglobina_g_dl_basal", "albumina_g_dl_basal",
+              "pas_mmhg_basal")
+
+atipicos_residuales <- base %>%
+  select(id_analitico, estadio_basal, all_of(vars_box)) %>%
+  pivot_longer(all_of(vars_box), names_to = "variable", values_to = "valor") %>%
+  filter(!is.na(valor)) %>%
+  group_by(variable, estadio_basal) %>%
+  filter(valor < quantile(valor, 0.25) - 1.5 * IQR(valor) |
+         valor > quantile(valor, 0.75) + 1.5 * IQR(valor)) %>%
+  ungroup() %>%
+  arrange(variable, estadio_basal)
+
+knitr::kable(atipicos_residuales, digits = 2,
+             caption = "Tabla. Valores atípicos residuales por estadio (criterio 1.5 × RIC)")
+```
+
+Después de la limpieza no se observan valores biológicamente imposibles. Los
+`r nrow(atipicos_residuales)` atípicos residuales corresponden a valores
+extremos pero posibles (por ejemplo, hemoglobina entre 6.8 y 17 g/dL, albúmina
+entre 2.8 y 4.9 g/dL y PAS entre 94 y 213 mmHg), por lo que se conservan. Se
+documenta una excepción en la creatinina: un participante de G2 con 1.61 mg/dL
+corresponde al valor corregido de µmol/L a mg/dL en la semana 12; es plausible
+en sí mismo, pero es discordante con su TFG basal (ver sección 7).
+
+# Evolución longitudinal de las variables clave
+
+## TFG a lo largo del seguimiento
+
+```{r figura-evolucion-tfg}
+fig_evolucion_tfg <- base %>%
+  select(id_analitico, estadio_basal,
+         tfg_ml_min_basal, tfg_ml_min_m12, tfg_ml_min_m24) %>%
+  pivot_longer(cols = starts_with("tfg"),
+               names_to = "tiempo", values_to = "tfg") %>%
+  mutate(tiempo = factor(tiempo,
+                         levels = c("tfg_ml_min_basal",
+                                    "tfg_ml_min_m12",
+                                    "tfg_ml_min_m24"),
+                         labels = c("Basal", "Mes 12", "Mes 24"))) %>%
+  filter(!is.na(tfg)) %>%
+  ggplot(aes(x = tiempo, y = tfg,
+             color = estadio_basal, group = id_analitico)) +
+  geom_line(alpha = 0.12) +
+  geom_smooth(aes(group = estadio_basal),
+              method = "loess", se = TRUE, linewidth = 1.5) +
+  scale_color_manual(values = colores_estadio) +
+  labs(title = "Evolución de la TFG durante el seguimiento",
+       x = "Punto de seguimiento",
+       y = "TFG estimada (mL/min/1.73m²)",
+       color = "Estadio basal") +
+  theme_minimal(base_size = 13)
+
+fig_evolucion_tfg
+```
+
+```{r tabla-declive-tfg}
+declive <- base %>%
+  filter(!is.na(tasa_declive_tfg)) %>%
+  group_by(estadio_basal) %>%
+  summarise(
+    n = n(),
+    mediana_declive = median(tasa_declive_tfg),
+    p25 = quantile(tasa_declive_tfg, 0.25),
+    p75 = quantile(tasa_declive_tfg, 0.75)
+  )
+
+knitr::kable(declive, digits = 1,
+             col.names = c("Estadio", "N", "Mediana (mL/min/año)", "P25", "P75"),
+             caption = "Tabla. Tasa anual de declive de TFG por estadio basal")
+```
+
+La TFG disminuye de forma progresiva en todos los estadios. El declive anual
+fue similar entre G2, G3a y G3b (medianas entre
+`r max(declive$mediana_declive[1:3])` y `r min(declive$mediana_declive[1:3])`
+mL/min/año) y más pronunciado en G4 (mediana
+`r declive$mediana_declive[4]` mL/min/año), lo que es coherente con la
+progresión acelerada de la ERC avanzada. El cálculo se limita a los
+`r sum(declive$n)` participantes con TFG al mes 24, por lo que puede
+subestimar el declive si los perdidos tenían peor evolución.
+
+## Desenlace por estadio
+
+```{r tabla-desenlace-por-estadio}
+desenlace <- base %>%
+  group_by(estadio_basal) %>%
+  summarise(
+    n = n(),
+    n_eventos = sum(progresion_g5_o_trr, na.rm = TRUE),
+    pct_eventos = round(mean(progresion_g5_o_trr, na.rm = TRUE) * 100, 1),
+    mediana_tiempo = median(tiempo_seguimiento_dias, na.rm = TRUE)
+  )
+
+knitr::kable(desenlace,
+             col.names = c("Estadio", "N", "N eventos", "% eventos",
+                           "Mediana seguimiento (días)"),
+             caption = "Tabla. Incidencia del desenlace por estadio de ERC")
+```
+
+El desenlace se concentra casi por completo en G4:
+`r desenlace$n_eventos[4]` de `r sum(desenlace$n_eventos)` eventos
+(`r desenlace$pct_eventos[4]`% de los participantes en G4), frente a
+`r sum(desenlace$n_eventos[1:3])` evento(s) en G2–G3b. El gradiente es el
+esperado, pero la proporción en G4 es mayor que la anticipada (30–45%) y casi
+no hay eventos en los demás estadios.
+
+# Correlaciones entre variables basales
+
+```{r matriz-correlaciones, fig.height=7}
+vars_cor <- base %>%
+  select(edad, tfg_ml_min_basal, creatinina_mg_dl_basal,
+         hemoglobina_g_dl_basal, albumina_g_dl_basal,
+         log_proteinuria_basal, pas_mmhg_basal,
+         imc_calculado, n_medicamentos_totales) %>%
+  na.omit()
+
+cor_mat <- cor(vars_cor, method = "spearman")
+colnames(cor_mat) <- rownames(cor_mat) <- c(
+  "Edad", "TFG", "Creatinina", "Hemoglobina", "Albúmina",
+  "Log-proteinuria", "PAS", "IMC", "N medicamentos"
+)
+
+corrplot(cor_mat,
+         method = "color",
+         type = "upper",
+         tl.cex = 0.85,
+         addCoef.col = "black",
+         number.cex = 0.7,
+         col = colorRampPalette(c("#CC0000", "white", "#1F5C99"))(200),
+         title = "Correlaciones de Spearman entre variables basales",
+         mar = c(0, 0, 2, 0))
+```
+
+La única correlación fuerte es la de la TFG con la creatinina
+(rho = `r round(cor_mat["TFG", "Creatinina"], 2)`), negativa como se espera
+clínicamente, dado que la TFG se estima a partir de la creatinina. Ambas
+variables no deben incluirse simultáneamente en un mismo modelo por
+colinealidad. Las demás correlaciones son débiles (|rho| < 0.2), incluida la
+de la TFG con la log-proteinuria, que se esperaría negativa.
+
+# Verificación de calidad post-limpieza
+
+```{r verificaciones-calidad}
+cat("=== VERIFICACIONES DE CALIDAD ===\n\n")
+
+# IDs duplicados
+duplicados <- sum(duplicated(base$id_analitico))
+cat("IDs duplicados:", duplicados, "\n")
+
+# Coherencia TFG-estadio
+cat("\nTFG por estadio (debe ser G2 > G3a > G3b > G4 y respetar los cortes KDIGO):\n")
+base %>%
+  group_by(estadio_basal) %>%
+  summarise(tfg_mediana = median(tfg_ml_min_basal, na.rm = TRUE),
+            tfg_min     = min(tfg_ml_min_basal, na.rm = TRUE),
+            tfg_max     = max(tfg_ml_min_basal, na.rm = TRUE)) %>%
+  print()
+
+# Coherencia seguimiento-pérdida
+incoherencias_m12 <- sum(
+  (!is.na(base$tfg_ml_min_m12) & base$perdida_seguimiento_m12) |
+  (is.na(base$tfg_ml_min_m12) & !base$perdida_seguimiento_m12),
+  na.rm = TRUE)
+incoherencias_m24 <- sum(
+  (!is.na(base$tfg_ml_min_m24) & base$perdida_seguimiento_m24) |
+  (is.na(base$tfg_ml_min_m24) & !base$perdida_seguimiento_m24),
+  na.rm = TRUE)
+cat("\nIncoherencias seguimiento-pérdida mes 12:", incoherencias_m12, "\n")
+cat("Incoherencias seguimiento-pérdida mes 24:", incoherencias_m24, "\n")
+
+# Tiempo de seguimiento según desenlace
+cat("\nTiempo de seguimiento (días) según desenlace:\n")
+base %>%
+  group_by(progresion_g5_o_trr) %>%
+  summarise(mediana = median(tiempo_seguimiento_dias, na.rm = TRUE),
+            minimo  = min(tiempo_seguimiento_dias, na.rm = TRUE),
+            maximo  = max(tiempo_seguimiento_dias, na.rm = TRUE)) %>%
+  print()
+
+# Relación TFG-creatinina (validación cruzada)
+cat("\nCorrelación TFG-creatinina basal (debe ser fuertemente negativa):",
+    round(cor(base$tfg_ml_min_basal, base$creatinina_mg_dl_basal,
+              use = "complete.obs", method = "spearman"), 2), "\n")
+```
+
+```{r figura-creatinina-tfg}
+ggplot(base %>% filter(creatinina_mg_dl_basal < 15),
+       aes(x = creatinina_mg_dl_basal, y = tfg_ml_min_basal,
+           color = estadio_basal)) +
+  geom_point(alpha = 0.5, size = 1.8) +
+  geom_smooth(aes(group = 1), color = "black", method = "loess",
+              se = FALSE, linewidth = 1) +
+  scale_color_manual(values = colores_estadio) +
+  scale_x_log10() +
+  labs(title = "Relación entre creatinina sérica y TFG estimada",
+       subtitle = "Validación cruzada de la coherencia entre variables de laboratorio",
+       x = "Creatinina sérica basal (mg/dL, escala logarítmica)",
+       y = "TFG estimada basal (mL/min/1.73m²)",
+       color = "Estadio") +
+  theme_minimal(base_size = 13)
+```
+
+Las verificaciones confirman la calidad de la base: no hay IDs duplicados, los
+rangos de TFG de cada estadio respetan los cortes KDIGO, no hay incoherencias
+entre los datos de seguimiento y el registro de pérdidas
+(`r incoherencias_m12` al mes 12 y `r incoherencias_m24` al mes 24), y los
+participantes con evento tienen un seguimiento más corto, como se espera. La
+relación entre creatinina y TFG sigue el patrón inverso y curvilíneo esperado.
+El único punto discordante es el participante de G2 cuya creatinina se
+convirtió de µmol/L (1.61 mg/dL con TFG de 74 mL/min/1.73m²); se mantiene la
+corrección, pero se recomienda priorizar la TFG sobre la creatinina en los
+análisis.
+
+# Evaluación de datos faltantes
+
+```{r patron-faltantes}
+vis_miss(base %>%
+           select(tfg_ml_min_m12, creatinina_mg_dl_m12,
+                  hemoglobina_g_dl_m12, albumina_g_dl_m12,
+                  proteinuria_mg_g_m12,
+                  tfg_ml_min_m24, hemoglobina_g_dl_m24,
+                  albumina_g_dl_m24, proteinuria_mg_g_m24)) +
+  labs(title = "Patrón de datos faltantes en variables de seguimiento")
+```
+
+```{r faltantes-hemoglobina-por-estadio}
+faltantes_hgb <- base %>%
+  group_by(estadio_basal) %>%
+  summarise(
+    con_dato     = sum(!is.na(hemoglobina_g_dl_m12)),
+    sin_dato     = sum(is.na(hemoglobina_g_dl_m12)),
+    pct_faltante = round(mean(is.na(hemoglobina_g_dl_m12)) * 100, 1)
+  )
+
+knitr::kable(faltantes_hgb,
+             col.names = c("Estadio", "Con dato", "Sin dato", "% faltante"),
+             caption = "Tabla. Datos faltantes en hemoglobina mes 12 por estadio")
+```
+
+Los faltantes en hemoglobina al mes 12 no son proporcionales entre estadios:
+`r faltantes_hgb$pct_faltante[1]`% en G2 y `r faltantes_hgb$pct_faltante[2]`%
+en G3a, frente a `r faltantes_hgb$pct_faltante[3]`% en G3b y
+`r faltantes_hgb$pct_faltante[4]`% en G4. El mismo patrón se observó en la TFG
+al mes 12 (semana 12). Esto no es compatible con MCAR y sugiere un mecanismo
+MAR condicionado al estadio basal. En consecuencia, un análisis de casos
+completos podría sesgar las estimaciones de las variables de seguimiento, y se
+justifica la imputación múltiple con el estadio como predictor.
+
+# Conclusiones para el análisis estadístico
+
+**Hallazgos principales del análisis exploratorio:**
+
+- La cohorte presenta el gradiente esperado en la función renal: la TFG
+  disminuye y la creatinina aumenta de G2 a G4, la hemoglobina es menor en G4
+  y el declive de la TFG es más rápido en G4.
+- La proteinuria tiene una distribución muy sesgada y, de forma inesperada,
+  no difiere entre estadios ni se correlaciona con la TFG.
+- La TFG y la creatinina están fuertemente correlacionadas
+  (rho ≈ `r round(cor_mat["TFG", "Creatinina"], 2)`); las demás covariables
+  tienen correlaciones débiles.
+- El desenlace se concentra en G4 (`r desenlace$n_eventos[4]` de
+  `r sum(desenlace$n_eventos)` eventos).
+- No se identificaron valores biológicamente imposibles ni incoherencias
+  estructurales. Persiste una discordancia puntual entre creatinina y TFG en
+  un participante cuyo valor fue convertido de µmol/L.
+
+**Decisiones metodológicas informadas por el análisis exploratorio:**
+
+- **Transformaciones:** usar `log_proteinuria_basal` en lugar de la
+  proteinuria cruda en los modelos.
+- **Datos faltantes:** dado el patrón compatible con MAR según el estadio,
+  realizar el análisis principal con casos completos y un análisis de
+  sensibilidad con imputación múltiple que incluya el estadio basal.
+- **Colinealidad:** no incluir simultáneamente la TFG y la creatinina en un
+  mismo modelo; priorizar la TFG (o el estadio) como medida de función renal.
+- **Patrones que requieren análisis adicional:** con casi todos los eventos
+  en G4, los modelos de supervivencia que incluyan el estadio como covariable
+  tendrán estimaciones inestables para G2–G3b (posible separación). Se
+  recomienda usar la TFG continua o el estadio agrupado (G2-G3a vs. G3b-G4) y
+  limitar el número de covariables al número de eventos disponibles
+  (`r sum(desenlace$n_eventos)`). La ausencia de gradiente en la proteinuria
+  debe tenerse en cuenta al interpretar su papel como factor pronóstico.
+
+**Declaración de preparación para el análisis:**
+
+La base analítica ha sido revisada y los datos están **listos** para el
+análisis estadístico formal, con las consideraciones metodológicas descritas
+sobre transformación de la proteinuria, colinealidad entre TFG y creatinina,
+manejo de datos faltantes y concentración de eventos en G4.
+
+# Exportación de figuras y tablas
+
+```{r exportar-productos}
+# Figura de evolución de la TFG
+ggsave(
+  filename = here("output", "figures", "fig_evolucion_tfg_seguimiento.png"),
+  plot = fig_evolucion_tfg,
+  width = 9, height = 6, dpi = 300
+)
+
+# Tabla 1
+tabla_1 %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(
+    path = here("output", "tables", "tabla_01_caracteristicas_basales.docx")
+  )
+```
+
+# Información de sesión
+
+```{r informacion-sesion}
+sessioninfo::session_info()
+```

@@ -1,0 +1,103 @@
+MEMO: DECISIONES ANALÍTICAS
+Proyecto: Cohorte ERC — Seminario de Epidemiología Clínica II
+Fecha: 08/11/2026
+Autor: Wendy Paola Rodríguez Pugliesse
+Base utilizada: data/processed/base_analitica_v1.0.rds
+Documentos: code/04_regresion_logistica.Rmd, code/05_regresion_lineal.Rmd,
+            code/06_analisis_supervivencia.Rmd
+
+═══════════════════════════════════════════════════
+1. SELECCIÓN DE COVARIABLES
+═══════════════════════════════════════════════════
+  Las covariables de los modelos ajustados fueron pre-especificadas en el
+  plan de análisis según los factores de riesgo conocidos para la
+  progresión de la ERC (edad, sexo, diabetes, HTA, log-proteinuria,
+  hemoglobina; y, en el modelo lineal, PAS e IECA/ARA2). No se realizó
+  selección automática por pasos.
+
+═══════════════════════════════════════════════════
+2. MANEJO DE DATOS FALTANTES EN EL ANÁLISIS
+═══════════════════════════════════════════════════
+  Se utilizó análisis de casos completos para los modelos principales.
+  - Regresión logística y Cox: 300 participantes, sin exclusiones (las
+    covariables basales no tienen datos faltantes). 33 eventos.
+  - Regresión lineal: 246 participantes con TFG al mes 24; se excluyeron
+    54 (18%), principalmente por pérdida de seguimiento.
+  Como se documentó en el análisis exploratorio, los faltantes son más
+  frecuentes en G3b-G4 (patrón compatible con MAR), por lo que el modelo
+  lineal podría subestimar el declive en los estadios avanzados. Se
+  propone un análisis de sensibilidad con imputación múltiple.
+
+═══════════════════════════════════════════════════
+3. TRANSFORMACIÓN DE PROTEINURIA
+═══════════════════════════════════════════════════
+  Se utilizó la transformación logarítmica (log natural) dada su
+  distribución fuertemente sesgada positivamente.
+
+═══════════════════════════════════════════════════
+4. CATEGORÍA DE REFERENCIA Y CODIFICACIÓN DEL ESTADIO
+═══════════════════════════════════════════════════
+  Estadio G2 como referencia en todos los modelos. El estadio se guardó en
+  la base analítica como factor ordenado; en los modelos se convirtió a
+  factor nominal para obtener comparaciones de cada estadio frente a G2
+  (con un factor ordenado, R estima contrastes polinómicos).
+
+═══════════════════════════════════════════════════
+5. SEPARACIÓN COMPLETA Y ANÁLISIS DE SENSIBILIDAD
+═══════════════════════════════════════════════════
+  Distribución de eventos por estadio: G2 0/69, G3a 0/93, G3b 1/85,
+  G4 32/53. Al no existir eventos en la categoría de referencia (G2) ni en
+  G3a, los modelos logístico y de Cox con el estadio como exposición
+  presentan separación completa: los OR y HR tienden a infinito, con
+  intervalos de confianza no informativos. Además, con 33 eventos el
+  modelo ajustado tiene menos de 10 eventos por parámetro.
+
+  Decisiones:
+  - Se mantienen los modelos pre-especificados en el plan, documentando
+    que sus estimaciones del estadio no son interpretables.
+  - Regresión logística: análisis de sensibilidad con regresión
+    penalizada de Firth (paquete logistf), que produce estimaciones
+    finitas en presencia de separación.
+  - Regresión logística y Cox: análisis de sensibilidad con la TFG basal
+    continua (por 10 mL/min/1.73m²) en lugar del estadio, que evita la
+    separación y se propone como análisis principal interpretable.
+  - La regresión lineal no se ve afectada, porque su desenlace es
+    continuo.
+
+═══════════════════════════════════════════════════
+6. RESULTADOS DE VERIFICACIÓN DE SUPUESTOS
+═══════════════════════════════════════════════════
+  Regresión logística:
+  - Multicolinealidad (GVIF ajustado máximo): 1.07 en el modelo con
+    estadio y 1.33 en el modelo con TFG continua. Sin colinealidad.
+  - Hosmer-Lemeshow: modelo con estadio chi² = 1.25, p = 0.996; modelo
+    con TFG continua chi² = 0.41, p = 1.000. Sin evidencia de falta de
+    ajuste, aunque la prueba tiene baja potencia con 33 eventos.
+  - La HTA mostró un OR < 1 significativo (0.09 en el modelo con TFG
+    continua), no plausible clínicamente; se interpreta como artefacto
+    de un modelo sobreajustado y de un grupo sin HTA pequeño (~13%).
+
+  Regresión lineal:
+  - Normalidad de residuos (Shapiro-Wilk): p = 0.997.
+  - Homocedasticidad (ncvTest): p = 0.057, en el límite; se sugiere
+    verificar con errores estándar robustos.
+  - Observaciones influyentes: 9 con distancia de Cook > 4/n; máxima
+    0.056 (ninguna > 1).
+  - Multicolinealidad (GVIF ajustado máximo): 1.05.
+
+  Modelo de Cox (modelo con TFG continua):
+  - Prueba de Schoenfeld global: p = 0.228.
+  - Ninguna variable violó el supuesto de riesgos proporcionales.
+
+═══════════════════════════════════════════════════
+7. RESULTADOS PRINCIPALES
+═══════════════════════════════════════════════════
+  - Logística (Firth): G4 vs G2 OR = 239.8 (IC 95% 29.1 a 31,761).
+    TFG continua: OR = 0.02 por 10 mL/min/1.73m² (IC 95% 0.00-0.07).
+  - Lineal: G4 declina 1.9 mL/min/año más rápido que G2 (IC 95% -2.8 a
+    -1.0); diabetes (β = -0.71) e IECA/ARA2 (β = -0.87, probable
+    confusión por indicación) también se asocian con declive más rápido.
+    R² = 0.15.
+  - Supervivencia: libres de progresión a 24 meses: G2 100%, G3a 100%,
+    G3b 98.5%, G4 28.5%; log-rank p < 0.001. Cox con TFG continua:
+    HR = 0.11 por 10 mL/min/1.73m² (IC 95% 0.06-0.20).

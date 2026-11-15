@@ -1,0 +1,663 @@
+---
+title: "Validación crítica de los análisis estadísticos — Cohorte ERC"
+author: "Wendy Paola Rodríguez Pugliesse"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 9, fig.height = 5.5)
+```
+
+```{r carga-datos-modelos}
+library(tidyverse)
+library(here)
+library(survival)
+library(survminer)
+library(car)
+library(lmtest)
+library(ResourceSelection)
+library(gtsummary)
+library(broom)
+library(logistf)
+
+# Cargar base analítica. El estadio se guardó como factor ordenado; se
+# convierte a factor nominal para que G2 sea la categoría de referencia.
+base <- readRDS(here("data", "processed", "base_analitica_v1.0.rds")) %>%
+  mutate(estadio_basal = factor(estadio_basal, ordered = FALSE),
+         tfg_10 = tfg_ml_min_basal / 10)
+
+# Bases por análisis
+base_log <- base %>%
+  filter(!is.na(progresion_g5_o_trr),
+         !is.na(log_proteinuria_basal),
+         !is.na(hemoglobina_g_dl_basal))
+
+base_lineal <- base %>%
+  filter(!is.na(tasa_declive_tfg),
+         !is.na(log_proteinuria_basal))
+
+base_surv <- base %>%
+  filter(!is.na(tiempo_seguimiento_dias),
+         !is.na(progresion_g5_o_trr))
+
+# Modelos pre-especificados (semana 14)
+modelo_log <- glm(
+  progresion_g5_o_trr ~ estadio_basal + edad + sexo +
+    diabetes + hipertension +
+    log_proteinuria_basal + hemoglobina_g_dl_basal,
+  data = base_log, family = binomial()
+)
+
+modelo_lineal <- lm(
+  tasa_declive_tfg ~ estadio_basal + edad + sexo +
+    diabetes + hipertension +
+    log_proteinuria_basal + hemoglobina_g_dl_basal +
+    pas_mmhg_basal + ieca_o_ara2,
+  data = base_lineal
+)
+
+modelo_cox <- coxph(
+  Surv(tiempo_seguimiento_dias, progresion_g5_o_trr) ~
+    estadio_basal + edad + sexo +
+    diabetes + hipertension +
+    log_proteinuria_basal + hemoglobina_g_dl_basal,
+  data = base_surv
+)
+
+# Modelos alternativos con TFG basal continua (por 10 mL/min/1.73m²),
+# definidos en la semana 14 para resolver la separación completa
+modelo_log_tfg <- glm(
+  progresion_g5_o_trr ~ tfg_10 + edad + sexo +
+    diabetes + hipertension +
+    log_proteinuria_basal + hemoglobina_g_dl_basal,
+  data = base_log, family = binomial()
+)
+
+modelo_cox_tfg <- coxph(
+  Surv(tiempo_seguimiento_dias, progresion_g5_o_trr) ~
+    tfg_10 + edad + sexo +
+    diabetes + hipertension +
+    log_proteinuria_basal + hemoglobina_g_dl_basal,
+  data = base_surv
+)
+
+# Indicadores usados a lo largo del documento
+n_eventos  <- sum(base_log$progresion_g5_o_trr)
+n_param    <- length(coef(modelo_log)) - 1
+epv        <- round(n_eventos / n_param, 1)
+eventos_estadio <- base %>%
+  group_by(estadio_basal) %>%
+  summarise(n = n(), eventos = sum(progresion_g5_o_trr))
+```
+
+# Coherencia entre pregunta de investigación y análisis
+
+```{r coherencia-pregunta-analisis}
+verificaciones <- tribble(
+  ~Verificación, ~Estado, ~Observaciones,
+
+  "El desenlace analizado responde la pregunta de investigación",
+  "OK",
+  "La pregunta indaga factores basales asociados con la progresión de la ERC; los tres desenlaces (progresión a G5/TRR, tasa de declive de la TFG y tiempo hasta progresión) son medidas complementarias de progresión.",
+
+  "El tipo de modelo es apropiado para el diseño del estudio",
+  "OK",
+  "Cohorte prospectiva con seguimiento de 24 meses: regresión logística para el desenlace binario, lineal para el continuo y Cox para el tiempo hasta el evento con censura. El modelo de Cox es el más informativo porque aprovecha el tiempo y la censura.",
+
+  "La exposición principal está codificada correctamente (ref: G2)",
+  "OK (con corrección)",
+  "El estadio estaba guardado como factor ordenado, lo que produce contrastes polinómicos. Se convirtió a factor nominal para estimar cada estadio frente a G2.",
+
+  "Las covariables corresponden al plan pre-especificado",
+  "OK",
+  "Edad, sexo, diabetes, HTA, log-proteinuria y hemoglobina (más PAS e IECA/ARA2 en el modelo lineal), sin selección automática.",
+
+  "El N analítico es el esperado para cada modelo",
+  paste0("Log: ", nrow(base_log), " | Lineal: ", nrow(base_lineal),
+         " | Cox: ", nrow(base_surv)),
+  paste0("Consistente: las covariables basales no tienen faltantes. El modelo lineal pierde ",
+         nrow(base) - nrow(base_lineal),
+         " participantes sin TFG al mes 24 (pérdida de seguimiento)."),
+
+  "Eventos/variable ≥ 10 (regla EPV — logístico y Cox)",
+  paste0("Eventos: ", n_eventos, " / Parámetros: ", n_param, " → EPV = ", epv),
+  "REVISAR: EPV < 10 indica riesgo de sobreajuste y estimaciones inestables.",
+
+  "Hay eventos en todas las categorías de la exposición",
+  paste(paste0(eventos_estadio$estadio_basal, ": ", eventos_estadio$eventos),
+        collapse = " | "),
+  "REVISAR: G2 (referencia) y G3a no tienen eventos → separación completa en los modelos logístico y de Cox."
+)
+
+knitr::kable(verificaciones,
+             col.names = c("Verificación", "Estado", "Observaciones"),
+             caption = "Tabla 1. Coherencia pregunta-análisis")
+```
+
+La revisión identifica dos problemas que condicionan la interpretación:
+un EPV de `r epv` (por debajo de 10) y la **separación completa** derivada de la
+ausencia de eventos en G2 y G3a. Ninguno invalida el diseño ni la elección de
+los modelos, pero ambos impiden interpretar los OR y HR del estadio obtenidos
+por máxima verosimilitud. Por ello, la validación se apoya también en los
+modelos con TFG continua y en la regresión de Firth (sección 4).
+
+# Validación de supuestos
+
+## Regresión logística
+
+### Multicolinealidad
+
+```{r vif-logistica}
+# car::vif() devuelve el GVIF para variables con más de un parámetro;
+# se usa GVIF^(1/(2*Df)), comparable entre variables
+# (umbral ≈ 2.24, equivalente a VIF = 5).
+tabla_vif <- function(modelo) {
+  v <- vif(modelo)
+  if (is.matrix(v)) {
+    tibble(Variable = rownames(v), GVIF_ajustado = v[, "GVIF^(1/(2*Df))"])
+  } else {
+    tibble(Variable = names(v), GVIF_ajustado = sqrt(v))
+  }
+}
+
+vif_df <- bind_rows(
+  tabla_vif(modelo_log)     %>% mutate(Modelo = "Con estadio"),
+  tabla_vif(modelo_log_tfg) %>% mutate(Modelo = "Con TFG continua")
+) %>%
+  mutate(VIF_equivalente = round(GVIF_ajustado^2, 2),
+         GVIF_ajustado   = round(GVIF_ajustado, 2),
+         Evaluación = case_when(
+           VIF_equivalente < 5  ~ "Sin problema",
+           VIF_equivalente < 10 ~ "Colinealidad moderada",
+           TRUE                 ~ "Colinealidad severa")) %>%
+  select(Modelo, Variable, GVIF_ajustado, VIF_equivalente, Evaluación)
+
+knitr::kable(vif_df,
+             caption = "Tabla 2. Multicolinealidad del modelo de regresión logística")
+```
+
+Todos los valores equivalentes de VIF son menores de 5
+(máximo `r max(vif_df$VIF_equivalente)`), por lo que no hay colinealidad
+relevante entre las covariables. La creatinina no se incluyó en los modelos,
+lo que evita la colinealidad conocida con la TFG (rho ≈ −0.9 en el análisis
+exploratorio). Si una variable superara un VIF de 5, se evaluaría retirarla o
+combinarla con la variable con la que comparte información.
+
+### Bondad de ajuste
+
+```{r hosmer-lemeshow}
+hl_log <- hoslem.test(as.numeric(base_log$progresion_g5_o_trr),
+                      fitted(modelo_log), g = 10)
+hl_tfg <- hoslem.test(as.numeric(base_log$progresion_g5_o_trr),
+                      fitted(modelo_log_tfg), g = 10)
+
+tibble(
+  Modelo = c("Con estadio", "Con TFG continua"),
+  `Chi²` = round(c(hl_log$statistic, hl_tfg$statistic), 3),
+  gl = c(hl_log$parameter, hl_tfg$parameter),
+  p = round(c(hl_log$p.value, hl_tfg$p.value), 4)
+) %>%
+  knitr::kable(caption = "Tabla 3. Prueba de Hosmer-Lemeshow")
+```
+
+Ninguno de los modelos muestra evidencia de falta de ajuste (p > 0.05). Sin
+embargo, un valor p cercano a 1 no debe interpretarse como un ajuste
+excelente: con `r n_eventos` eventos la prueba tiene baja potencia, y en el
+modelo con estadio las probabilidades predichas de 0 en G2-G3a (efecto de la
+separación) favorecen artificialmente el ajuste.
+
+### Linealidad en la escala logit
+
+```{r linealidad-logit}
+# Se usa el modelo con TFG continua: en el modelo con estadio, la separación
+# produce probabilidades predichas de prácticamente 0 y logits extremos.
+base_log %>%
+  mutate(logit = predict(modelo_log_tfg, type = "link")) %>%
+  select(logit, edad, log_proteinuria_basal, hemoglobina_g_dl_basal,
+         tfg_ml_min_basal) %>%
+  pivot_longer(-logit, names_to = "variable", values_to = "valor") %>%
+  mutate(variable = dplyr::recode(variable,
+    "edad"                   = "Edad",
+    "log_proteinuria_basal"  = "Log-proteinuria",
+    "hemoglobina_g_dl_basal" = "Hemoglobina",
+    "tfg_ml_min_basal"       = "TFG basal")) %>%
+  ggplot(aes(x = valor, y = logit)) +
+  geom_point(alpha = 0.3, size = 1) +
+  geom_smooth(method = "loess", color = "#1F5C99", se = TRUE) +
+  facet_wrap(~variable, scales = "free_x") +
+  labs(title = "Linealidad de variables continuas en la escala logit",
+       subtitle = "Modelo logístico con TFG basal continua",
+       x = "Valor de la variable", y = "Logit predicho") +
+  theme_minimal()
+```
+
+El logit predicho depende casi por completo de la TFG basal, con una relación
+lineal decreciente, como se espera. Para edad, log-proteinuria y hemoglobina,
+la nube de puntos refleja sobre todo la variabilidad de la TFG: no hay curvas
+en U ni formas irregulares que obliguen a transformar o categorizar estas
+variables.
+
+## Regresión lineal
+
+### Gráficos diagnósticos
+
+```{r diagnosticos-lineal, fig.height=7}
+par(mfrow = c(2, 2))
+plot(modelo_lineal,
+     sub.caption = "Diagnósticos — Regresión lineal (tasa de declive TFG)")
+par(mfrow = c(1, 1))
+```
+
+### Pruebas formales
+
+```{r pruebas-formales-lineal}
+bp <- bptest(modelo_lineal)
+residuos <- residuals(modelo_lineal)
+set.seed(2024)
+sw <- shapiro.test(sample(residuos, min(length(residuos), 5000)))
+cook <- cooks.distance(modelo_lineal)
+
+tibble(
+  Supuesto = c("Homocedasticidad (Breusch-Pagan)",
+               "Normalidad de residuos (Shapiro-Wilk)",
+               "Observaciones influyentes (Cook > 4/n)",
+               "Multicolinealidad (VIF equivalente máximo)"),
+  Resultado = c(
+    paste0("BP = ", round(bp$statistic, 2), "; p = ", round(bp$p.value, 4)),
+    paste0("W = ", round(sw$statistic, 4), "; p = ", round(sw$p.value, 4)),
+    paste0(sum(cook > 4 / length(cook)), " observaciones; Cook máx. = ",
+           round(max(cook), 3)),
+    as.character(round(max(tabla_vif(modelo_lineal)$GVIF_ajustado^2), 2))
+  )
+) %>%
+  knitr::kable(caption = "Tabla 4. Pruebas formales del modelo lineal")
+```
+
+Los residuos se distribuyen alrededor de cero sin patrón en U, el gráfico Q-Q
+sigue la diagonal (Shapiro-Wilk p = `r round(sw$p.value, 3)`) y ninguna
+observación supera una distancia de Cook de 1
+(máximo `r round(max(cook), 3)`). La prueba de Breusch-Pagan da
+p = `r round(bp$p.value, 3)`,
+`r ifelse(bp$p.value < 0.05, "por lo que hay evidencia de heterocedasticidad", "sin evidencia de heterocedasticidad")`.
+En la semana 14, la prueba de varianza no constante de `car::ncvTest()`, que
+evalúa la varianza frente a los valores ajustados, dio un resultado en el límite
+(p = 0.057). Por esta discrepancia entre pruebas, en la sección 4 se recalculan
+los errores estándar con un estimador robusto (HC3) para verificar que las
+conclusiones no dependen de este supuesto.
+
+## Modelo de Cox
+
+### Supuesto de riesgos proporcionales
+
+```{r schoenfeld}
+ph_tfg <- cox.zph(modelo_cox_tfg)
+ph_estadio <- tryCatch(cox.zph(modelo_cox), error = function(e) NULL)
+
+tabla_ph <- as.data.frame(ph_tfg$table) %>%
+  rownames_to_column("Variable") %>%
+  transmute(Variable,
+            Chi2 = round(chisq, 3),
+            p    = round(p, 4),
+            Evaluación = ifelse(p < 0.05, "[!] Posible violación",
+                                "[OK] Supuesto cumplido"))
+
+knitr::kable(tabla_ph,
+             caption = "Tabla 5. Prueba de Schoenfeld — modelo de Cox con TFG continua")
+
+if (!is.null(ph_estadio)) {
+  print(ph_estadio)
+} else {
+  cat("En el modelo con estadio la prueba no puede calcularse por la separación.\n")
+}
+```
+
+```{r grafico-schoenfeld, fig.height=8}
+ggcoxzph(ph_tfg)
+```
+
+```{r violaciones-ph, include=FALSE}
+violaciones <- tabla_ph$Variable[tabla_ph$p < 0.05 & tabla_ph$Variable != "GLOBAL"]
+```
+
+En el modelo con TFG continua, la prueba global de Schoenfeld tiene
+p = `r tabla_ph$p[tabla_ph$Variable == "GLOBAL"]`.
+`r if (length(violaciones) == 0) "Ninguna variable viola el supuesto de riesgos proporcionales y los residuos no muestran tendencia en el tiempo." else paste0("Muestran posible violación: ", paste(violaciones, collapse = ", "), ".")`
+En el modelo con estadio, los resultados de esta prueba no son fiables por la
+separación. Si alguna variable violara el supuesto, la estrategia sería
+estratificar por ella con `strata()`; si fuera la exposición principal, se
+incluiría su interacción con el tiempo o se estimarían HR por periodos.
+
+# Coherencia entre modelos
+
+## Comparación OR vs HR
+
+```{r comparacion-or-hr}
+extraer <- function(modelo, nombre) {
+  tidy(modelo, exponentiate = TRUE, conf.int = TRUE) %>%
+    filter(grepl("estadio|tfg_10", term)) %>%
+    transmute(term, !!nombre := sprintf("%s (%s–%s)",
+                                         formatC(estimate, format = "g", digits = 3),
+                                         formatC(conf.low, format = "g", digits = 3),
+                                         formatC(conf.high, format = "g", digits = 3)))
+}
+
+comparacion <- bind_rows(
+  left_join(extraer(modelo_log, "OR (IC 95%)"),
+            extraer(modelo_cox, "HR (IC 95%)"), by = "term") %>%
+    mutate(Especificación = "Estadio (máxima verosimilitud)"),
+  left_join(extraer(modelo_log_tfg, "OR (IC 95%)"),
+            extraer(modelo_cox_tfg, "HR (IC 95%)"), by = "term") %>%
+    mutate(Especificación = "TFG continua (por 10 mL/min/1.73m²)")
+) %>%
+  select(Especificación, Término = term, everything())
+
+knitr::kable(comparacion,
+             caption = "Tabla 6. Comparación OR (logístico) vs HR (Cox)")
+
+incidencia <- round(mean(base$progresion_g5_o_trr) * 100, 1)
+or_tfg <- exp(coef(modelo_log_tfg)["tfg_10"])
+hr_tfg <- exp(coef(modelo_cox_tfg)["tfg_10"])
+```
+
+Con el estadio como exposición, los OR y los HR son valores enormes con
+intervalos que van de 0 a infinito: no son comparables ni interpretables por
+la separación. Con la TFG continua, ambos modelos coinciden en la dirección
+(menor riesgo con mayor TFG), pero el OR (`r round(or_tfg, 2)`) es mucho más
+extremo que el HR (`r round(hr_tfg, 2)`). Esta diferencia es esperable: aunque
+la incidencia global es de `r incidencia`%, el desenlace es muy frecuente en
+G4 (`r round(eventos_estadio$eventos[4] / eventos_estadio$n[4] * 100)`%), y
+cuando el evento es frecuente el OR se aleja del riesgo relativo y exagera la
+magnitud. El HR, además, incorpora el tiempo hasta el evento y la censura.
+
+## Coherencia con el análisis descriptivo
+
+```{r coherencia-descriptivo}
+tasa_descriptivo <- base %>%
+  group_by(estadio_basal) %>%
+  summarise(n = n(),
+            n_eventos = sum(progresion_g5_o_trr),
+            tasa_pct  = round(mean(progresion_g5_o_trr) * 100, 1),
+            mediana_declive = median(tasa_declive_tfg, na.rm = TRUE))
+
+knitr::kable(tasa_descriptivo,
+             col.names = c("Estadio", "N", "Eventos", "% eventos",
+                           "Mediana de declive (mL/min/año)"),
+             caption = "Tabla 7. Eventos y declive por estadio (análisis descriptivo)")
+```
+
+Los modelos son coherentes con el análisis descriptivo: G4 concentra los
+eventos y el declive más rápido, y es también el estadio con mayor OR/HR y el
+único con un coeficiente significativo en el modelo lineal. No hay
+inconsistencias en la dirección de los efectos. La única discrepancia es
+numérica: el valor exagerado de los OR/HR del estadio, que se explica por la
+separación y no por un error en los datos.
+
+# Análisis de sensibilidad
+
+## Nota sobre la sensibilidad propuesta en la guía
+
+```{r nota-creatinina}
+cat("Participantes con creatinina basal faltante:",
+    sum(is.na(base$creatinina_mg_dl_basal)), "\n")
+cat("Valores de creatinina basal > 15 mg/dL en la base analítica:",
+    sum(base$creatinina_mg_dl_basal > 15, na.rm = TRUE), "\n")
+```
+
+La guía propone excluir un valor de creatinina de 18.5 mg/dL conservado en
+la base. En este proyecto ese valor **no se conservó**: durante la limpieza
+(semana 12) se codificó como faltante por ser incompatible con la TFG basal
+(ver `docs/memo_preparacion_datos.txt`). Además, la creatinina no es
+covariable de ningún modelo, por lo que excluirla no modificaría las
+estimaciones. Se presentan en su lugar tres análisis de sensibilidad
+dirigidos a los problemas identificados en esta validación.
+
+## Sensibilidad 1: separación completa (regresión de Firth)
+
+```{r sensibilidad-firth}
+modelo_firth <- logistf(
+  as.numeric(progresion_g5_o_trr) ~ estadio_basal + edad + sexo +
+    diabetes + hipertension +
+    log_proteinuria_basal + hemoglobina_g_dl_basal,
+  data = base_log
+)
+
+tabla_s1 <- tibble(
+  Variable          = names(coef(modelo_log)),
+  OR_principal      = exp(coef(modelo_log)),
+  OR_Firth          = exp(coef(modelo_firth)),
+  IC_Firth          = sprintf("%.2f–%s", exp(modelo_firth$ci.lower),
+                              format(round(exp(modelo_firth$ci.upper), 2),
+                                     big.mark = ",")),
+  p_Firth           = round(modelo_firth$prob, 3)
+) %>%
+  filter(Variable != "(Intercept)") %>%
+  mutate(OR_principal = formatC(OR_principal, format = "g", digits = 3),
+         OR_Firth     = round(OR_Firth, 2))
+
+knitr::kable(tabla_s1,
+             col.names = c("Variable", "OR principal (MV)", "OR Firth",
+                           "IC 95% Firth", "p Firth"),
+             caption = "Tabla 8. Sensibilidad 1: máxima verosimilitud vs Firth")
+
+or_g4_firth <- tabla_s1$OR_Firth[tabla_s1$Variable == "estadio_basalG4"]
+```
+
+La regresión de Firth produce estimaciones finitas: G4 tiene un OR de
+`r or_g4_firth` frente a G2, con un intervalo amplio, pero claramente por
+encima de 1. G3a y G3b no difieren de G2. Las covariables cambian poco
+entre ambos métodos, por lo que la separación afecta sobre todo a la
+exposición. La conclusión principal, mayor riesgo de progresión en G4, se
+mantiene.
+
+## Sensibilidad 2: definición alternativa del desenlace
+
+```{r sensibilidad-desenlace-alternativo}
+# Desenlace alternativo: progresión a G5 por laboratorio (TFG < 15 al mes 24),
+# en los participantes con TFG medida al mes 24.
+base_s2 <- base %>%
+  filter(!is.na(tfg_ml_min_m24)) %>%
+  mutate(g5_laboratorio = tfg_ml_min_m24 < 15)
+
+cat("N en el análisis de sensibilidad 2:", nrow(base_s2), "\n")
+cat("Eventos (TFG < 15 al mes 24):", sum(base_s2$g5_laboratorio), "\n\n")
+
+cat("Concordancia con el desenlace principal:\n")
+print(table(`TFG < 15 mes 24` = base_s2$g5_laboratorio,
+            `Progresión G5/TRR` = base_s2$progresion_g5_o_trr))
+
+modelo_s2 <- glm(
+  g5_laboratorio ~ tfg_10 + edad + sexo +
+    diabetes + hipertension +
+    log_proteinuria_basal + hemoglobina_g_dl_basal,
+  data = base_s2, family = binomial()
+)
+
+comp_s2 <- tibble(
+  Variable = names(coef(modelo_log_tfg)),
+  OR_principal = exp(coef(modelo_log_tfg)),
+  OR_alternativo = exp(coef(modelo_s2))
+) %>%
+  filter(Variable != "(Intercept)") %>%
+  mutate(across(where(is.numeric), ~ round(., 3)))
+
+knitr::kable(comp_s2,
+             col.names = c("Variable", "OR desenlace principal",
+                           "OR desenlace alternativo"),
+             caption = "Tabla 9. Sensibilidad 2: desenlace alternativo (TFG < 15 al mes 24)")
+```
+
+Se utilizó el modelo con TFG continua, porque el desenlace alternativo
+tampoco tiene eventos en G2 ni en G3a. Ambos desenlaces concuerdan en la
+mayoría de los participantes y, con la definición alternativa, la TFG basal
+mantiene una asociación inversa fuerte con la progresión
+(OR `r comp_s2$OR_alternativo[comp_s2$Variable == "tfg_10"]` frente a
+`r comp_s2$OR_principal[comp_s2$Variable == "tfg_10"]` con el desenlace
+principal). La dirección y la conclusión se mantienen. Las diferencias en la
+magnitud de las covariables reflejan el menor tamaño de muestra y el bajo
+número de eventos, y no un cambio de conclusión.
+
+## Sensibilidad 3: errores estándar robustos en el modelo lineal
+
+```{r sensibilidad-robusta}
+clasico <- coeftest(modelo_lineal)
+robusto <- coeftest(modelo_lineal, vcov. = hccm(modelo_lineal, type = "hc3"))
+
+tabla_s3 <- tibble(
+  Variable    = rownames(clasico),
+  Beta        = round(clasico[, 1], 3),
+  EE_clasico  = round(clasico[, 2], 3),
+  p_clasico   = round(clasico[, 4], 4),
+  EE_robusto  = round(robusto[, 2], 3),
+  p_robusto   = round(robusto[, 4], 4)
+) %>%
+  filter(Variable != "(Intercept)")
+
+knitr::kable(tabla_s3,
+             col.names = c("Variable", "β", "EE clásico", "p clásico",
+                           "EE robusto (HC3)", "p robusto"),
+             caption = "Tabla 10. Sensibilidad 3: errores estándar robustos")
+
+cambio_sig <- sum((tabla_s3$p_clasico < 0.05) != (tabla_s3$p_robusto < 0.05))
+```
+
+Con errores estándar robustos, los coeficientes no cambian (por definición) y
+los errores estándar se modifican muy poco.
+`r ifelse(cambio_sig == 0, "Ninguna variable cambia de significancia estadística, por lo que las conclusiones del modelo lineal (declive más rápido en G4, con diabetes y con IECA/ARA2) son robustas a una posible heterocedasticidad.", paste(cambio_sig, "variable(s) cambian de significancia estadística, lo que debe tenerse en cuenta en la interpretación."))`
+
+# Evaluación de plausibilidad clínica
+
+```{r resumen-resultados}
+# Se resumen los modelos con TFG continua: los modelos con estadio no
+# producen estimaciones interpretables por la separación.
+etiquetas <- list(
+  tfg_10                 ~ "TFG basal (por 10 mL/min/1.73m²)",
+  edad                   ~ "Edad (por año)",
+  sexo                   ~ "Sexo",
+  diabetes               ~ "Diabetes mellitus",
+  hipertension           ~ "Hipertensión arterial",
+  log_proteinuria_basal  ~ "Log-proteinuria",
+  hemoglobina_g_dl_basal ~ "Hemoglobina (por g/dL)"
+)
+
+tbl_merge(
+  list(
+    tbl_regression(modelo_log_tfg, exponentiate = TRUE, label = etiquetas) %>%
+      bold_p(t = 0.05),
+    tbl_regression(modelo_cox_tfg, exponentiate = TRUE, label = etiquetas) %>%
+      bold_p(t = 0.05)
+  ),
+  tab_spanner = c("**Regresión logística (OR)**", "**Modelo de Cox (HR)**")
+) %>%
+  modify_caption("**Tabla 11. Resumen de los modelos con TFG basal continua**")
+
+pct_hta <- round(mean(base$hipertension) * 100)
+```
+
+1. **Dirección.** Las asociaciones principales van en la dirección
+   esperada: una menor función renal basal (estadio más avanzado o TFG más
+   baja) se asocia con mayor probabilidad y mayor velocidad de progresión, y
+   con un declive más rápido de la TFG. La asociación de la diabetes con un
+   declive más rápido también es coherente con el conocimiento previo.
+
+2. **Magnitud.** El efecto de la función renal basal es clínicamente
+   relevante: cada 10 mL/min/1.73m² menos de TFG reducen de forma marcada la
+   supervivencia libre de progresión (HR `r round(hr_tfg, 2)` por cada 10
+   unidades adicionales), y G4 declina cerca de 2 mL/min/año más rápido que
+   G2. Los OR del estadio por máxima verosimilitud no son magnitudes
+   plausibles, sino un artefacto de la separación.
+
+3. **Coherencia interna.** Los tres modelos, el análisis descriptivo y las
+   curvas de Kaplan-Meier cuentan la misma historia: la progresión depende
+   sobre todo de la función renal basal y se concentra en G4.
+
+4. **Hallazgos inesperados.**
+   - En el modelo logístico, la **hipertensión** aparece como "protectora"
+     (OR < 1). No es plausible: la HTA está presente en el `r pct_hta`% de la
+     cohorte, el grupo sin HTA es pequeño y el modelo tiene un EPV bajo. En el
+     modelo de Cox la asociación no es significativa. Se interpreta como un
+     artefacto y no como un efecto real.
+   - El uso de **IECA/ARA2** se asocia con un declive más rápido, lo que se
+     explica probablemente por confusión por indicación (se prescriben a
+     pacientes con enfermedad más activa).
+   - La **proteinuria** no se asoció con la progresión, a pesar de ser un
+     factor pronóstico reconocido en la ERC. Puede reflejar el carácter
+     sintético de la base o la falta de gradiente de proteinuria entre
+     estadios observada en el análisis exploratorio.
+
+# Problemas identificados y acciones tomadas
+
+```{r problemas-acciones}
+problemas <- tribble(
+  ~Problema, ~Gravedad, ~Accion_tomada,
+
+  "Separación completa: sin eventos en G2 (referencia) ni en G3a; OR y HR del estadio no interpretables",
+  "Alta",
+  "Se documentó en cada reporte; se agregó regresión de Firth y modelos con TFG continua como análisis interpretables",
+
+  paste0("EPV bajo (", epv, " eventos por parámetro) en los modelos logístico y de Cox"),
+  "Alta",
+  "Se mantienen las covariables pre-especificadas; las estimaciones de covariables se interpretan con cautela y se priorizan los modelos más parsimoniosos",
+
+  "Estadio guardado como factor ordenado (contrastes polinómicos)",
+  "Media",
+  "Se convirtió a factor nominal con G2 como referencia en todos los modelos",
+
+  "Asociación 'protectora' no plausible de la HTA en el modelo logístico",
+  "Media",
+  "Se interpreta como artefacto de sobreajuste; no se reporta como hallazgo",
+
+  paste0("Resultados discrepantes de homocedasticidad (Breusch-Pagan p = ", round(bp$p.value, 3), "; ncvTest p = 0.057)"),
+  "Baja",
+  "Errores estándar robustos (HC3): las conclusiones no cambian",
+
+  paste0("Pérdida de ", nrow(base) - nrow(base_lineal),
+         " participantes en el modelo lineal, más frecuente en G3b-G4 (patrón MAR)"),
+  "Media",
+  "Análisis de casos completos; se recomienda imputación múltiple como sensibilidad adicional",
+
+  "La sensibilidad propuesta en la guía (creatinina 18.5) no aplica",
+  "Baja",
+  "El valor se codificó como faltante en la limpieza; se reemplazó por tres análisis de sensibilidad pertinentes"
+)
+
+knitr::kable(problemas,
+             col.names = c("Problema identificado", "Gravedad", "Acción tomada"),
+             caption = "Tabla 12. Problemas identificados y acciones correctivas")
+```
+
+# Declaración de preparación para el análisis final
+
+Los análisis estadísticos de la cohorte ERC han sido revisados críticamente.
+Los análisis están **listos para la generación de los productos finales**, con
+el siguiente ajuste: la estimación del efecto de la función renal basal sobre
+la progresión se reportará con los modelos de TFG continua y la regresión de
+Firth, mientras que los modelos con estadio por máxima verosimilitud se
+presentarán solo para documentar la separación.
+
+Los supuestos de los modelos **se cumplen satisfactoriamente** (sin
+colinealidad, ajuste adecuado según Hosmer-Lemeshow, residuos aproximadamente
+normales, sin observaciones con influencia excesiva y riesgos proporcionales en
+el modelo de Cox con TFG continua). Las limitaciones que se discutirán en el
+manuscrito son la separación completa, el EPV bajo y la pérdida de seguimiento
+en el modelo lineal.
+
+Los análisis de sensibilidad **confirman la robustez de los resultados
+principales**: la asociación entre una peor función renal basal y la
+progresión se mantiene con la regresión de Firth, con una definición
+alternativa del desenlace y con errores estándar robustos. Se sugiere cautela
+en la interpretación de las covariables, en particular la hipertensión y el
+uso de IECA/ARA2.
+
+# Información de sesión
+
+```{r informacion-sesion}
+sessioninfo::session_info()
+```
